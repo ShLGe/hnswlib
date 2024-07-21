@@ -277,27 +277,26 @@ class Index {
     }
 
     std::priority_queue<std::pair<dist_t, labeltype >>
-    searchKnn(const void *query_data, size_t k, BaseFilterFunctor* isIdAllowed = nullptr) {
+    searchKnn(const void *query_data, size_t k, size_t efSearch, BaseFilterFunctor* isIdAllowed = nullptr) {
         if (!index_inited)
             throw std::runtime_error("Index not inited");
         
-        return appr_alg->searchKnn(query_data, k, isIdAllowed);
+        return appr_alg->searchKnn(query_data, k, efSearch, isIdAllowed);
     }
 
     std::priority_queue<std::pair<dist_t, labeltype >>
-    searchRange(const void *query_data, float threshold, BaseFilterFunctor* isIdAllowed = nullptr) {
+    searchRange(const void *query_data, float threshold, size_t efSearch, size_t max_efSearch, BaseFilterFunctor* isIdAllowed = nullptr) {
         if (!index_inited)
             throw std::runtime_error("Index not inited");
         
         bool stop_flag = false;
-        size_t l_search = default_ef; // starting size of the candidate list
-        size_t max_l_search = 8 * default_ef;
+        size_t l_search = efSearch; // starting size of the candidate list
+        size_t max_l_search = max_efSearch;
         std::priority_queue<std::pair<dist_t, labeltype >> final_result;
 
         while (!stop_flag) {
             size_t i = 0;
-            appr_alg->ef_ = l_search;
-            auto knn_result = appr_alg->searchKnn(query_data, l_search, isIdAllowed);
+            auto knn_result = appr_alg->searchKnn(query_data, l_search, l_search, isIdAllowed);
             while (!knn_result.empty()) {
                 std::pair<float, uint64_t> neighbor = knn_result.top(); // In default the top has the largest distance
                 if (neighbor.first < threshold && i < l_search / 2) { // Find the first element that is in the range
@@ -322,7 +321,6 @@ class Index {
             if (l_search > max_l_search)
                 stop_flag = true;
         }
-        appr_alg->ef_ = default_ef;
         return final_result;
     }
 
