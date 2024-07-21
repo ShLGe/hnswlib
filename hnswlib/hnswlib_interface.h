@@ -284,6 +284,48 @@ class Index {
         return appr_alg->searchKnn(query_data, k, isIdAllowed);
     }
 
+    std::priority_queue<std::pair<dist_t, labeltype >>
+    searchRange(const void *query_data, float threshold, BaseFilterFunctor* isIdAllowed = nullptr) {
+        if (!index_inited)
+            throw std::runtime_error("Index not inited");
+        
+        bool stop_flag = false;
+        size_t l_search = default_ef; // starting size of the candidate list
+        size_t max_l_search = 8 * default_ef;
+        std::priority_queue<std::pair<dist_t, labeltype >> final_result;
+
+        while (!stop_flag) {
+            size_t i = 0;
+            appr_alg->ef_ = l_search;
+            auto knn_result = appr_alg->searchKnn(query_data, l_search, isIdAllowed);
+            while (!knn_result.empty()) {
+                std::pair<float, uint64_t> neighbor = knn_result.top(); // In default the top has the largest distance
+                if (neighbor.first < threshold && i < l_search / 2) { // Find the first element that is in the range
+                    if (l_search >= max_l_search) { //Reach the max l_search, directly return remaining elements in results
+                        final_result = knn_result;
+                        stop_flag = true;
+                        break;
+                    }   
+                    else 
+                        break;
+                }
+                else if (neighbor.first < threshold) {
+                    final_result = knn_result;
+                    stop_flag = true;
+                    break;
+                }
+                //this element has distance larger than threshold, discard it
+                knn_result.pop();
+                i++;   
+            }
+            l_search *= 2;
+            if (l_search > max_l_search)
+                stop_flag = true;
+        }
+        appr_alg->ef_ = default_ef;
+        return final_result;
+    }
+
     std::vector<hnswlib::labeltype> getIdsList() {
         std::vector<hnswlib::labeltype> ids;
 
