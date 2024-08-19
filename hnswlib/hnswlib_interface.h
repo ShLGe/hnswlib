@@ -78,47 +78,21 @@ inline void assert_true(bool expr, const std::string & msg) {
     return;
 }
 
-
-class CustomFilterFunctor: public hnswlib::BaseFilterFunctor {
-    std::function<bool(hnswlib::labeltype)> filter;
+template<typename idtype>
+class CustomFilterFunctor: public hnswlib::BaseFilterFunctor<idtype> {
+    std::function<bool(idtype)> filter;
 
  public:
-    explicit CustomFilterFunctor(const std::function<bool(hnswlib::labeltype)>& f) {
+    explicit CustomFilterFunctor(const std::function<bool(idtype)>& f) {
         filter = f;
     }
 
-    bool operator()(hnswlib::labeltype id) {
+    bool operator()(idtype id) {
         return filter(id);
     }
 };
 
-float* read_float_from_fbin(const std::string& input_file, uint32_t& num_points, uint32_t& dim) {
-    std::ifstream fin(input_file, std::ios::binary);
-    if (!fin.is_open()) {
-        std::cerr << "Error: Unable to open input file " << input_file << std::endl;
-        return nullptr;
-    }
-
-    // Read the number of points and dimensions from the fbin file
-    fin.read(reinterpret_cast<char*>(&num_points), sizeof(uint32_t));
-    fin.read(reinterpret_cast<char*>(&dim), sizeof(uint32_t));
-
-    // Calculate the total number of floats
-    size_t total_floats = num_points * dim;
-
-    // Allocate memory for the float data
-    float* float_array = new float[total_floats];
-
-    // Read the float data
-    fin.read(reinterpret_cast<char*>(float_array), total_floats * sizeof(float));
-
-    fin.close();
-    return float_array;
-}
-
-
-
-template<typename dist_t, typename data_t = float>
+template<typename idtype, typename dist_t, typename data_t = float>
 class Index {
  public:
     static const int ser_version = 1;  // serialization version
@@ -132,9 +106,9 @@ class Index {
     bool ep_added;
     bool normalize;
     int num_threads_default;
-    hnswlib::labeltype cur_l;
-    hnswlib::HierarchicalNSW<dist_t>* appr_alg;
-    hnswlib::SpaceInterface<float>* l2space;
+    idtype cur_l;
+    hnswlib::HierarchicalNSW<idtype, data_t>* appr_alg;
+    hnswlib::SpaceInterface<data_t>* l2space;
 
 
     Index(const std::string &space_name, const int dim) : space_name(space_name), dim(dim) {
@@ -170,12 +144,12 @@ class Index {
         size_t M,
         size_t efConstruction,
         size_t random_seed = 100,
-        bool allow_replace_deleted = false) {
+        bool allow_replace_deleted = true) {
         if (appr_alg) {
             throw std::runtime_error("The index is already initiated.");
         }
         cur_l = 0;
-        appr_alg = new hnswlib::HierarchicalNSW<dist_t>(l2space, maxElements, M, efConstruction, random_seed, allow_replace_deleted);
+        appr_alg = new hnswlib::HierarchicalNSW<idtype, data_t>(l2space, maxElements, M, efConstruction, random_seed, allow_replace_deleted);
         index_inited = true;
         ep_added = false;
         appr_alg->ef_ = default_ef;
@@ -203,13 +177,13 @@ class Index {
     }
 
 
-    void loadIndex(const std::string &path_to_index) {
+    void loadIndex(const std::string &path_to_index, uint32_t max_elements) {
       if (appr_alg) {
           std::cerr << "Warning: Calling load_index for an already inited index. Old index is being deallocated." << std::endl;
           delete appr_alg;
       }
       
-      appr_alg = new hnswlib::HierarchicalNSW<dist_t>(l2space, path_to_index);
+      appr_alg = new hnswlib::HierarchicalNSW<idtype, data_t>(l2space, path_to_index, false, max_elements, true);
       cur_l = appr_alg->cur_element_count;
       index_inited = true;
     }
@@ -224,8 +198,37 @@ class Index {
             norm_array[i] = data[i] * norm;
     }
 
+    void applyfunction(const void* data, bool replace_deleted) {
 
-    void addItems(const float* vector_array, std::vector<hnswlib::labeltype>& ids, size_t rows, size_t features, int num_threads = -1, bool replace_deleted = false) {
+        size_t flag_size = sizeof(uint8_t); // The size of flag
+        size_t id_size = sizeof(idtype); // The size of idtype
+        size_t embedding_size = dim * sizeof(data_t);
+
+        const uint8_t* ptr = static_cast<const uint8_t*>(data);
+
+        // Extract flag
+        uint8_t flag;
+        std::memcpy(&flag, ptr, flag_size);
+        ptr += flag_size;
+
+        // Extract id
+        idtype id;
+        std::memcpy(&id, ptr, id_size);
+        ptr += id_size;
+
+        // Extract embedding
+        void* embedding = const_cast<void*>(static_cast<const void*>(ptr));
+
+        if (flag == 0) {
+            appr_alg->markDelete(id);
+        } else if (flag == 1) {
+            appr_alg->addPoint(embedding, id, replace_deleted);
+        }
+        else throw std::runtime_error("Wrong flag");
+    }
+
+
+    void updateItems(const char* element_array, size_t rows, size_t features, int num_threads = -1, bool replace_deleted = false) {
 
         if (!index_inited)
             throw std::runtime_error("Index not inited");
@@ -241,12 +244,22 @@ class Index {
             num_threads = 1;
         }
 
+        size_t flag_size = sizeof(uint8_t);
+        size_t id_size = sizeof(idtype); // The size of idtype
+        size_t embedding_size = dim * sizeof(data_t);
+
         {
             int start = 0;
             if (!ep_added) {
-                hnswlib::labeltype id = ids.size() ? ids.at(0) : (cur_l);
-                float* vector_data = vector_array;
-                std::vector<float> norm_array(dim);
+                const uint8_t* ptr = reinterpret_cast<const uint8_t*>(element_array);
+                assert(*ptr == 1);
+                ptr += flag_size;
+
+                idtype id = *(idtype*)ptr;
+                ptr += id_size;
+
+                data_t* vector_data = (data_t*)ptr;
+                std::vector<data_t> norm_array(dim);
                 if (normalize) {
                     normalize_vector(vector_data, norm_array.data());
                     vector_data = norm_array.data();
@@ -258,41 +271,51 @@ class Index {
 
             if (normalize == false) {
                 ParallelFor(start, rows, num_threads, [&](size_t row, size_t threadId) {
-                    hnswlib::labeltype id = ids.size() ? ids.at(row) : (cur_l + row);
-                    appr_alg->addPoint((void*)(vector_array + row * features), id, replace_deleted);
+                    //idtype id = ids.size() ? ids.at(row) : (cur_l + row);
+                    //appr_alg->addPoint((void*)(vector_array + row * features), id, replace_deleted);
+                    applyfunction((void*)(element_array + row * (flag_size + id_size + embedding_size)), replace_deleted);
                     });
             } else {
-                std::vector<float> norm_array(num_threads * dim);
+                std::vector<data_t> norm_array(num_threads * dim);
                 ParallelFor(start, rows, num_threads, [&](size_t row, size_t threadId) {
                     // normalize vector:
                     size_t start_idx = threadId * dim;
-                    normalize_vector((float*)(vector_array + row * features), (norm_array.data() + start_idx));
+                    uint8_t* element_ptr = (uint8_t*)(element_array + row * (flag_size + id_size + embedding_size));
+                    uint8_t flag = *element_ptr;
+                    element_ptr += flag_size;
 
-                    hnswlib::labeltype id = ids.size() ? ids.at(row) : (cur_l + row);
-                    appr_alg->addPoint((void*)(norm_array.data() + start_idx), id, replace_deleted);
+                    idtype id = *(idtype*)element_ptr;
+                    element_ptr += id_size;
+
+                    if (flag == 1) {
+                        normalize_vector((data_t*)element_ptr, (norm_array.data() + start_idx));
+                        appr_alg->addPoint((void*)(norm_array.data() + start_idx), id, replace_deleted);
+                    }
+                    else if (flag == 0) appr_alg->markDelete(id);
+                    else throw std::runtime_error("Wrong flag");
                     });
             }
             cur_l += rows;
         }
     }
 
-    std::priority_queue<std::pair<dist_t, labeltype >>
-    searchKnn(const void *query_data, size_t k, size_t efSearch, BaseFilterFunctor* isIdAllowed = nullptr) {
+    std::priority_queue<std::pair<data_t, idtype >>
+    searchKnn(const void *query_data, size_t k, size_t efSearch, BaseFilterFunctor<idtype>* isIdAllowed = nullptr) {
         if (!index_inited)
             throw std::runtime_error("Index not inited");
         
         return appr_alg->searchKnn(query_data, k, efSearch, isIdAllowed);
     }
 
-    std::priority_queue<std::pair<dist_t, labeltype >>
-    searchRange(const void *query_data, float threshold, size_t efSearch, size_t max_efSearch, BaseFilterFunctor* isIdAllowed = nullptr) {
+    std::priority_queue<std::pair<data_t, idtype >>
+    searchRange(const void *query_data, float threshold, size_t efSearch, size_t max_efSearch, BaseFilterFunctor<idtype>* isIdAllowed = nullptr) {
         if (!index_inited)
             throw std::runtime_error("Index not inited");
         
         bool stop_flag = false;
         size_t l_search = efSearch; // starting size of the candidate list
         size_t max_l_search = max_efSearch;
-        std::priority_queue<std::pair<dist_t, labeltype >> final_result;
+        std::priority_queue<std::pair<data_t, idtype >> final_result;
 
         while (!stop_flag) {
             size_t i = 0;
@@ -324,8 +347,8 @@ class Index {
         return final_result;
     }
 
-    std::vector<hnswlib::labeltype> getIdsList() {
-        std::vector<hnswlib::labeltype> ids;
+    std::vector<idtype> getIdsList() {
+        std::vector<idtype> ids;
 
         for (auto kv : appr_alg->label_lookup_) {
             ids.push_back(kv.first);
@@ -333,12 +356,29 @@ class Index {
         return ids;
     }
 
-    void markDeleted(size_t label) {
+    bool getEmbedding(idtype label, data_t* container) {
+        std::vector<data_t> data_vector = appr_alg->getDataByLabel(label);
+        
+        // Check if the retrieved data is empty
+        if (data_vector.empty()) {
+            return false;
+        }
+        
+        assert(data_vector.size() == dim);
+        size_t data_size = dim * sizeof(data_t);
+        
+        std::memcpy(container, data_vector.data(), data_size);
+
+        return true;
+        
+    }
+
+    void markDeleted(idtype label) {
         appr_alg->markDelete(label);
     }
 
 
-    void unmarkDeleted(size_t label) {
+    void unmarkDeleted(idtype label) {
         appr_alg->unmarkDelete(label);
     }
 
@@ -356,10 +396,14 @@ class Index {
     size_t getCurrentCount() const {
         return appr_alg->cur_element_count;
     }
+
+    size_t getActiveCount() const {
+        return appr_alg->cur_element_count - appr_alg->deleted_elements.size();
+    }
 };
 
 /*
-template<typename dist_t, typename data_t = float>
+template<typename data_t, typename data_t = float>
 class BFIndex {
  public:
     static const int ser_version = 1;  // serialization version
@@ -370,8 +414,8 @@ class BFIndex {
     bool normalize;
     int num_threads_default;
 
-    hnswlib::labeltype cur_l;
-    hnswlib::BruteforceSearch<dist_t>* alg;
+    idtype cur_l;
+    hnswlib::BruteforceSearch<data_t>* alg;
     hnswlib::SpaceInterface<float>* space;
 
 
@@ -421,7 +465,7 @@ class BFIndex {
             throw std::runtime_error("The index is already initiated.");
         }
         cur_l = 0;
-        alg = new hnswlib::BruteforceSearch<dist_t>(space, maxElements);
+        alg = new hnswlib::BruteforceSearch<data_t>(space, maxElements);
         index_inited = true;
     }
 
@@ -437,7 +481,7 @@ class BFIndex {
 
 
     void addItems(std::string, py::object ids_ = py::none()) {
-        py::array_t < dist_t, py::array::c_style | py::array::forcecast > items(input);
+        py::array_t < data_t, py::array::c_style | py::array::forcecast > items(input);
         auto buffer = items.request();
         size_t rows, features;
         uint32_t num_points, dimension;
@@ -483,7 +527,7 @@ class BFIndex {
             std::cerr << "Warning: Calling load_index for an already inited index. Old index is being deallocated." << std::endl;
             delete alg;
         }
-        alg = new hnswlib::BruteforceSearch<dist_t>(space, path_to_index);
+        alg = new hnswlib::BruteforceSearch<data_t>(space, path_to_index);
         cur_l = alg->cur_element_count;
         index_inited = true;
     }
@@ -493,11 +537,11 @@ class BFIndex {
         py::object input,
         size_t k = 1,
         int num_threads = -1,
-        const std::function<bool(hnswlib::labeltype)>& filter = nullptr) {
-        py::array_t < dist_t, py::array::c_style | py::array::forcecast > items(input);
+        const std::function<bool(idtype)>& filter = nullptr) {
+        py::array_t < data_t, py::array::c_style | py::array::forcecast > items(input);
         auto buffer = items.request();
-        hnswlib::labeltype *data_numpy_l;
-        dist_t *data_numpy_d;
+        idtype *data_numpy_l;
+        data_t *data_numpy_d;
         size_t rows, features;
 
         if (num_threads <= 0)
@@ -507,14 +551,14 @@ class BFIndex {
             py::gil_scoped_release l;
             get_input_array_shapes(buffer, &rows, &features);
 
-            data_numpy_l = new hnswlib::labeltype[rows * k];
-            data_numpy_d = new dist_t[rows * k];
+            data_numpy_l = new idtype[rows * k];
+            data_numpy_d = new data_t[rows * k];
 
             CustomFilterFunctor idFilter(filter);
             CustomFilterFunctor* p_idFilter = filter ? &idFilter : nullptr;
 
             ParallelFor(0, rows, num_threads, [&](size_t row, size_t threadId) {
-                std::priority_queue<std::pair<dist_t, hnswlib::labeltype >> result = alg->searchKnn(
+                std::priority_queue<std::pair<data_t, idtype >> result = alg->searchKnn(
                     (void*)items.data(row), k, p_idFilter);
                 for (int i = k - 1; i >= 0; i--) {
                     auto& result_tuple = result.top();
@@ -534,15 +578,15 @@ class BFIndex {
 
 
         return py::make_tuple(
-                py::array_t<hnswlib::labeltype>(
+                py::array_t<idtype>(
                         { rows, k },  // shape
-                        { k * sizeof(hnswlib::labeltype),
-                          sizeof(hnswlib::labeltype)},  // C-style contiguous strides for each index
+                        { k * sizeof(idtype),
+                          sizeof(idtype)},  // C-style contiguous strides for each index
                         data_numpy_l,  // the data pointer
                         free_when_done_l),
-                py::array_t<dist_t>(
+                py::array_t<data_t>(
                         { rows, k },  // shape
-                        { k * sizeof(dist_t), sizeof(dist_t) },  // C-style contiguous strides for each index
+                        { k * sizeof(data_t), sizeof(data_t) },  // C-style contiguous strides for each index
                         data_numpy_d,  // the data pointer
                         free_when_done_d));
     }

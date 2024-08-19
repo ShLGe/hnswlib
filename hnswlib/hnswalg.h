@@ -14,8 +14,8 @@ namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;
 
-template<typename dist_t>
-class HierarchicalNSW : public AlgorithmInterface<dist_t> {
+template<typename idtype, typename dist_t>
+class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
  public:
     static const tableint MAX_LABEL_OPERATION_LOCKS = 65536;
     static const unsigned char DELETE_MARK = 0x01;
@@ -57,7 +57,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     void *dist_func_param_{nullptr};
 
     mutable std::mutex label_lookup_lock;  // lock for label_lookup_
-    std::unordered_map<labeltype, tableint> label_lookup_;
+    std::unordered_map<idtype, tableint> label_lookup_;
 
     std::default_random_engine level_generator_;
     std::default_random_engine update_probability_generator_;
@@ -118,7 +118,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         update_probability_generator_.seed(random_seed + 1);
 
         size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
-        size_data_per_element_ = size_links_level0_ + data_size_ + sizeof(labeltype);
+        size_data_per_element_ = size_links_level0_ + data_size_ + sizeof(idtype);
         offsetData_ = size_links_level0_;
         label_offset_ = size_links_level0_ + data_size_;
         offsetLevel0_ = 0;
@@ -181,27 +181,27 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
 
-    inline std::mutex& getLabelOpMutex(labeltype label) const {
+    inline std::mutex& getLabelOpMutex(idtype label) const {
         // calculate hash
         size_t lock_id = label & (MAX_LABEL_OPERATION_LOCKS - 1);
         return label_op_locks_[lock_id];
     }
 
 
-    inline labeltype getExternalLabel(tableint internal_id) const {
-        labeltype return_label;
-        memcpy(&return_label, (data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_), sizeof(labeltype));
+    inline idtype getExternalLabel(tableint internal_id) const {
+        idtype return_label;
+        memcpy(&return_label, (data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_), sizeof(idtype));
         return return_label;
     }
 
 
-    inline void setExternalLabel(tableint internal_id, labeltype label) const {
-        memcpy((data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_), &label, sizeof(labeltype));
+    inline void setExternalLabel(tableint internal_id, idtype label) const {
+        memcpy((data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_), &label, sizeof(idtype));
     }
 
 
-    inline labeltype *getExternalLabeLp(tableint internal_id) const {
-        return (labeltype *) (data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_);
+    inline idtype *getExternalLabeLp(tableint internal_id) const {
+        return (idtype *) (data_level0_memory_ + internal_id * size_data_per_element_ + label_offset_);
     }
 
 
@@ -318,8 +318,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         tableint ep_id,
         const void *data_point,
         size_t ef,
-        BaseFilterFunctor* isIdAllowed = nullptr,
-        BaseSearchStopCondition<dist_t>* stop_condition = nullptr) const {
+        BaseFilterFunctor<idtype>* isIdAllowed = nullptr,
+        BaseSearchStopCondition<idtype, dist_t>* stop_condition = nullptr) const {
         VisitedList *vl = visited_list_pool_->getFreeVisitedList();
         vl_type *visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
@@ -828,8 +828,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
 
-    template<typename data_t>
-    std::vector<data_t> getDataByLabel(labeltype label) const {
+    //template<typename dist_t>
+    std::vector<dist_t> getDataByLabel(idtype label) const {
         // lock all operations with element by label
         std::unique_lock <std::mutex> lock_label(getLabelOpMutex(label));
         
@@ -843,8 +843,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
         char* data_ptrv = getDataByInternalId(internalId);
         size_t dim = *((size_t *) dist_func_param_);
-        std::vector<data_t> data;
-        data_t* data_ptr = (data_t*) data_ptrv;
+        std::vector<dist_t> data;
+        dist_t* data_ptr = (dist_t*) data_ptrv;
         for (size_t i = 0; i < dim; i++) {
             data.push_back(*data_ptr);
             data_ptr += 1;
@@ -856,7 +856,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     /*
     * Marks an element with the given label deleted, does NOT really change the current graph.
     */
-    void markDelete(labeltype label) {
+    void markDelete(idtype label) {
         // lock all operations with element by label
         std::unique_lock <std::mutex> lock_label(getLabelOpMutex(label));
 
@@ -898,7 +898,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     * Note: the method is not safe to use when replacement of deleted elements is enabled,
     *  because elements marked as deleted can be completely removed by addPoint
     */
-    void unmarkDelete(labeltype label) {
+    void unmarkDelete(idtype label) {
         // lock all operations with element by label
         std::unique_lock <std::mutex> lock_label(getLabelOpMutex(label));
 
@@ -957,7 +957,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     * Adds point. Updates the point if it is already in the index.
     * If replacement of deleted elements is enabled: replaces previously deleted point if any, updating it with new point
     */
-    void addPoint(const void *data_point, labeltype label, bool replace_deleted = false) {
+    void addPoint(const void *data_point, idtype label, bool replace_deleted = false) {
         if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
             throw std::runtime_error("Replacement of deleted elements is disabled in constructor");
         }
@@ -984,7 +984,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             addPoint(data_point, label, -1);
         } else {
             // we assume that there are no concurrent operations on deleted element
-            labeltype label_replaced = getExternalLabel(internal_id_replaced);
+            idtype label_replaced = getExternalLabel(internal_id_replaced);
             setExternalLabel(internal_id_replaced, label);
 
             std::unique_lock <std::mutex> lock_table(label_lookup_lock);
@@ -1156,7 +1156,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
 
-    tableint addPoint(const void *data_point, labeltype label, int level) {
+    tableint addPoint(const void *data_point, idtype label, int level) {
         tableint cur_c = 0;
         {
             // Checking if the element with the same label already exists
@@ -1206,7 +1206,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         memset(data_level0_memory_ + cur_c * size_data_per_element_ + offsetLevel0_, 0, size_data_per_element_);
 
         // Initialisation of the data and label
-        memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
+        memcpy(getExternalLabeLp(cur_c), &label, sizeof(idtype));
         memcpy(getDataByInternalId(cur_c), data_point, data_size_);
 
         if (curlevel) {
@@ -1273,9 +1273,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     }
 
 
-    std::priority_queue<std::pair<dist_t, labeltype >>
-    searchKnn(const void *query_data, size_t k, size_t efSearch, BaseFilterFunctor* isIdAllowed = nullptr) const {
-        std::priority_queue<std::pair<dist_t, labeltype >> result;
+    std::priority_queue<std::pair<dist_t, idtype >>
+    searchKnn(const void *query_data, size_t k, size_t efSearch, BaseFilterFunctor<idtype>* isIdAllowed = nullptr) const {
+        std::priority_queue<std::pair<dist_t, idtype >> result;
         if (cur_element_count == 0) return result;
 
         tableint currObj = enterpoint_node_;
@@ -1323,19 +1323,19 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
         while (top_candidates.size() > 0) {
             std::pair<dist_t, tableint> rez = top_candidates.top();
-            result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
+            result.push(std::pair<dist_t, idtype>(rez.first, getExternalLabel(rez.second)));
             top_candidates.pop();
         }
         return result;
     }
 
 
-    std::vector<std::pair<dist_t, labeltype >>
+    std::vector<std::pair<dist_t, idtype >>
     searchStopConditionClosest(
         const void *query_data,
-        BaseSearchStopCondition<dist_t>& stop_condition,
-        BaseFilterFunctor* isIdAllowed = nullptr) const {
-        std::vector<std::pair<dist_t, labeltype >> result;
+        BaseSearchStopCondition<idtype, dist_t>& stop_condition,
+        BaseFilterFunctor<idtype>* isIdAllowed = nullptr) const {
+        std::vector<std::pair<dist_t, idtype >> result;
         if (cur_element_count == 0) return result;
 
         tableint currObj = enterpoint_node_;
