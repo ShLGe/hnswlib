@@ -303,8 +303,12 @@ class Index {
     searchKnn(const void *query_data, size_t k, size_t efSearch, BaseFilterFunctor<idtype>* isIdAllowed = nullptr) {
         if (!index_inited)
             throw std::runtime_error("Index not inited");
-        
-        return appr_alg->searchKnn(query_data, k, efSearch, isIdAllowed);
+        if (normalize == false)
+            return appr_alg->searchKnn(query_data, k, efSearch, isIdAllowed);
+
+        std::vector<data_t> norm_array(dim);
+        normalize_vector((data_t*)query_data, norm_array.data());
+        return appr_alg->searchKnn((void*)norm_array.data(), k, efSearch, isIdAllowed);
     }
 
     std::priority_queue<std::pair<data_t, idtype >>
@@ -317,9 +321,15 @@ class Index {
         size_t max_l_search = max_efSearch;
         std::priority_queue<std::pair<data_t, idtype >> final_result;
 
+        std::vector<data_t> norm_array(dim);
+        if (normalize == true)
+            normalize_vector((data_t*)query_data, norm_array.data());
+
         while (!stop_flag) {
             size_t i = 0;
-            auto knn_result = appr_alg->searchKnn(query_data, l_search, l_search, isIdAllowed);
+            auto knn_result = normalize ? 
+                            appr_alg->searchKnn((void*)norm_array.data(), l_search, l_search, isIdAllowed) : 
+                            appr_alg->searchKnn(query_data, l_search, l_search, isIdAllowed);
             while (!knn_result.empty()) {
                 std::pair<float, uint64_t> neighbor = knn_result.top(); // In default the top has the largest distance
                 if (neighbor.first < threshold && i < l_search / 2) { // Find the first element that is in the range

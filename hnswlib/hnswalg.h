@@ -151,17 +151,13 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
     void clear() {
         free(data_level0_memory_);
         data_level0_memory_ = nullptr;
-        std::cout << cur_element_count << " linkList" << std::endl;
         for (tableint i = 0; i < cur_element_count; i++) {
             if (element_levels_[i] > 0)
                 free(linkLists_[i]);
             //std::cout << "Free " << i << " linkList" << std::endl;
             linkLists_[i] = nullptr;
         }
-        if (linkLists_)
-            std::cout << "Have linkLists_ " << std::endl;
         free(linkLists_);
-        std::cout << "Free " <<" ALL" << std::endl;
         linkLists_ = nullptr;
         cur_element_count = 0;
         visited_list_pool_.reset(nullptr);
