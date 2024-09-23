@@ -39,27 +39,8 @@ inline void ParallelFor(size_t start, size_t end, size_t numThreads, Function fn
 
         for (size_t threadId = 0; threadId < numThreads; ++threadId) {
             threads.push_back(std::thread([&, threadId] {
-                while (true) {
-                    size_t id = current.fetch_add(1);
-
-                    if (id >= end) {
-                        break;
-                    }
-
-                    try {
-                        fn(id, threadId);
-                    } catch (...) {
-                        std::unique_lock<std::mutex> lastExcepLock(lastExceptMutex);
-                        lastException = std::current_exception();
-                        /*
-                         * This will work even when current is the largest value that
-                         * size_t can fit, because fetch_add returns the previous value
-                         * before the increment (what will result in overflow
-                         * and produce 0 instead of current + 1).
-                         */
-                        current = end;
-                        break;
-                    }
+                for (size_t id = start; id < end; id++) {
+                    fn(id, threadId);
                 }
             }));
         }
@@ -198,35 +179,6 @@ class Index {
             norm_array[i] = data[i] * norm;
     }
 
-    void applyfunction(const void* data, bool replace_deleted) {
-
-        size_t flag_size = sizeof(uint8_t); // The size of flag
-        size_t id_size = sizeof(idtype); // The size of idtype
-        size_t embedding_size = dim * sizeof(data_t);
-
-        const uint8_t* ptr = static_cast<const uint8_t*>(data);
-
-        // Extract flag
-        uint8_t flag;
-        std::memcpy(&flag, ptr, flag_size);
-        ptr += flag_size;
-
-        // Extract id
-        idtype id;
-        std::memcpy(&id, ptr, id_size);
-        ptr += id_size;
-
-        // Extract embedding
-        void* embedding = const_cast<void*>(static_cast<const void*>(ptr));
-
-        if (flag == 0) {
-            appr_alg->markDelete(id);
-        } else if (flag == 1) {
-            appr_alg->addPoint(embedding, id, replace_deleted);
-        }
-        else throw std::runtime_error("Wrong flag");
-    }
-
 
     void updateItems(const char* element_array, size_t rows, size_t features, int num_threads = -1, bool replace_deleted = false) {
 
@@ -271,9 +223,20 @@ class Index {
 
             if (normalize == false) {
                 ParallelFor(start, rows, num_threads, [&](size_t row, size_t threadId) {
-                    //idtype id = ids.size() ? ids.at(row) : (cur_l + row);
-                    //appr_alg->addPoint((void*)(vector_array + row * features), id, replace_deleted);
-                    applyfunction((void*)(element_array + row * (flag_size + id_size + embedding_size)), replace_deleted);
+                    // normalize vector:
+                    size_t start_idx = threadId * dim;
+                    uint8_t* element_ptr = (uint8_t*)(element_array + row * (flag_size + id_size + embedding_size));
+                    idtype id = *(idtype*)(element_ptr + flag_size);
+                    if (id % num_threads == threadId) {
+                        uint8_t flag = *element_ptr;
+                        element_ptr += flag_size + id_size;
+
+                        if (flag == 1) {
+                            appr_alg->addPoint((void*)element_ptr, id, replace_deleted);
+                        }
+                        else if (flag == 0) appr_alg->markDelete(id);
+                        else throw std::runtime_error("Wrong flag");
+                    }
                     });
             } else {
                 std::vector<data_t> norm_array(num_threads * dim);
@@ -281,18 +244,18 @@ class Index {
                     // normalize vector:
                     size_t start_idx = threadId * dim;
                     uint8_t* element_ptr = (uint8_t*)(element_array + row * (flag_size + id_size + embedding_size));
-                    uint8_t flag = *element_ptr;
-                    element_ptr += flag_size;
+                    idtype id = *(idtype*)(element_ptr + flag_size);
+                    if (id % num_threads == threadId) {
+                        uint8_t flag = *element_ptr;
+                        element_ptr += flag_size + id_size;
 
-                    idtype id = *(idtype*)element_ptr;
-                    element_ptr += id_size;
-
-                    if (flag == 1) {
-                        normalize_vector((data_t*)element_ptr, (norm_array.data() + start_idx));
-                        appr_alg->addPoint((void*)(norm_array.data() + start_idx), id, replace_deleted);
+                        if (flag == 1) {
+                            normalize_vector((data_t*)element_ptr, (norm_array.data() + start_idx));
+                            appr_alg->addPoint((void*)(norm_array.data() + start_idx), id, replace_deleted);
+                        }
+                        else if (flag == 0) appr_alg->markDelete(id);
+                        else throw std::runtime_error("Wrong flag");
                     }
-                    else if (flag == 0) appr_alg->markDelete(id);
-                    else throw std::runtime_error("Wrong flag");
                     });
             }
             cur_l += rows;
