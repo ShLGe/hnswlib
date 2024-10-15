@@ -50,6 +50,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
     char *data_level0_memory_{nullptr};
     char **linkLists_{nullptr};
     std::vector<int> element_levels_;  // keeps level of each element
+    double *normalize_factor_array{nullptr};
 
     size_t data_size_{0};
 
@@ -141,6 +142,10 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
         size_links_per_element_ = maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
         mult_ = 1 / log(1.0 * M_);
         revSize_ = 1.0 / mult_;
+
+        normalize_factor_array = (double *) malloc(max_elements_ * sizeof(double));
+        if (normalize_factor_array == nullptr)
+            throw std::runtime_error("Not enough memory: HierarchicalNSW failed to allocate normalize_factor_array");
     }
 
 
@@ -151,6 +156,8 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
     void clear() {
         free(data_level0_memory_);
         data_level0_memory_ = nullptr;
+        free(normalize_factor_array);
+        normalize_factor_array = nullptr;
         for (tableint i = 0; i < cur_element_count; i++) {
             if (element_levels_[i] > 0)
                 free(linkLists_[i]);
@@ -656,6 +663,12 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             throw std::runtime_error("Not enough memory: resizeIndex failed to allocate other layers");
         linkLists_ = linkLists_new;
 
+        // Reallocate base layer
+        double * normalize_factor_array_new = (double *) realloc(normalize_factor_array, new_max_elements * sizeof(double));
+        if (normalize_factor_array_new == nullptr)
+            throw std::runtime_error("Not enough memory: resizeIndex failed to allocate normalize factor array");
+        normalize_factor_array = normalize_factor_array_new;
+
         max_elements_ = new_max_elements;
     }
 
@@ -713,6 +726,8 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             if (linkListSize)
                 output.write(linkLists_[i], linkListSize);
         }
+
+        output.write((char*)normalize_factor_array, cur_element_count * sizeof(double));
         output.close();
     }
 
@@ -820,6 +835,11 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             }
         }
 
+        normalize_factor_array = (double *) malloc(max_elements * sizeof(double));
+        if (normalize_factor_array == nullptr)
+            throw std::runtime_error("Not enough memory: loadIndex failed to allocate normalize_factor_array");
+        input.read((char*)normalize_factor_array, cur_element_count * sizeof(double));
+
         input.close();
 
         return;
@@ -848,6 +868,22 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             data_ptr += 1;
         }
         return data;
+    }
+
+    double getNormalizeFactorByLabel(idtype label) const {
+        // lock all operations with element by label
+        std::unique_lock <std::mutex> lock_label(getLabelOpMutex(label));
+        
+        std::unique_lock <std::mutex> lock_table(label_lookup_lock);
+        auto search = label_lookup_.find(label);
+        if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
+            throw std::runtime_error("Label not found");
+        }
+        tableint internalId = search->second;
+        lock_table.unlock();
+
+        double factor = normalize_factor_array[internalId];
+        return factor;
     }
 
 
@@ -955,7 +991,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
     * Adds point. Updates the point if it is already in the index.
     * If replacement of deleted elements is enabled: replaces previously deleted point if any, updating it with new point
     */
-    void addPoint(const void *data_point, idtype label, bool replace_deleted = false) {
+    void addPoint(const void *data_point, idtype label, bool replace_deleted = false, double normalize_factor = 1.0) {
         if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
             throw std::runtime_error("Replacement of deleted elements is disabled in constructor");
         }
@@ -963,7 +999,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
         // lock all operations with element by label
         std::unique_lock <std::mutex> lock_label(getLabelOpMutex(label));
         if (!replace_deleted) {
-            addPoint(data_point, label, -1);
+            addPoint(data_point, label, -1, normalize_factor);
             return;
         }
         // check if there is vacant place
@@ -979,7 +1015,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
         // if there is no vacant place then add or update point
         // else add point to vacant place
         if (!is_vacant_place) {
-            addPoint(data_point, label, -1);
+            addPoint(data_point, label, -1, normalize_factor);
         } else {
             // we assume that there are no concurrent operations on deleted element
             idtype label_replaced = getExternalLabel(internal_id_replaced);
@@ -991,14 +1027,15 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             lock_table.unlock();
 
             unmarkDeletedInternal(internal_id_replaced);
-            updatePoint(data_point, internal_id_replaced, 1.0);
+            updatePoint(data_point, internal_id_replaced, 1.0, normalize_factor);
         }
     }
 
 
-    void updatePoint(const void *dataPoint, tableint internalId, float updateNeighborProbability) {
+    void updatePoint(const void *dataPoint, tableint internalId, float updateNeighborProbability, double normalize_factor) {
         // update the feature vector associated with existing point with new vector
         memcpy(getDataByInternalId(internalId), dataPoint, data_size_);
+        normalize_factor_array[internalId] = normalize_factor;
 
         int maxLevelCopy = maxlevel_;
         tableint entryPointCopy = enterpoint_node_;
@@ -1154,7 +1191,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
     }
 
 
-    tableint addPoint(const void *data_point, idtype label, int level) {
+    tableint addPoint(const void *data_point, idtype label, int level, double normalize_factor = 1.0) {
         tableint cur_c = 0;
         {
             // Checking if the element with the same label already exists
@@ -1173,7 +1210,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
                 if (isMarkedDeleted(existingInternalId)) {
                     unmarkDeletedInternal(existingInternalId);
                 }
-                updatePoint(data_point, existingInternalId, 1.0);
+                updatePoint(data_point, existingInternalId, 1.0, normalize_factor);
 
                 return existingInternalId;
             }
@@ -1202,6 +1239,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
         tableint enterpoint_copy = enterpoint_node_;
 
         memset(data_level0_memory_ + cur_c * size_data_per_element_ + offsetLevel0_, 0, size_data_per_element_);
+        normalize_factor_array[cur_c] = normalize_factor;
 
         // Initialisation of the data and label
         memcpy(getExternalLabeLp(cur_c), &label, sizeof(idtype));

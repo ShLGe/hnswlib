@@ -32,8 +32,8 @@ static __int64 xgetbv(unsigned int x) {
 }
 #else
 #include <x86intrin.h>
-//#include <cpuid.h>
-#include "engine/utility/gutil/ghardware_info.hpp"
+#include <cpuid.h>
+//#include "engine/utility/gutil/ghardware_info.hpp"
 #include <stdint.h>
 static void cpuid(int32_t cpuInfo[4], int32_t eax, int32_t ecx) {
     __cpuid_count(eax, ecx, cpuInfo[0], cpuInfo[1], cpuInfo[2], cpuInfo[3]);
@@ -187,7 +187,7 @@ class SpaceInterface {
 template<typename idtype, typename dist_t>
 class AlgorithmInterface {
  public:
-    virtual void addPoint(const void *datapoint, idtype label, bool replace_deleted = false) = 0;
+    virtual void addPoint(const void *datapoint, idtype label, bool replace_deleted = false, double normalize_factor = 1.0) = 0;
 
     virtual std::priority_queue<std::pair<dist_t, idtype>>
         searchKnn(const void*, size_t, size_t, BaseFilterFunctor<idtype>* isIdAllowed = nullptr) const = 0;

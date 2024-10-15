@@ -170,13 +170,16 @@ class Index {
     }
 
 
-    void normalize_vector(float* data, float* norm_array) {
+    double normalize_vector(float* data, float* norm_array) {
         float norm = 0.0f;
+        double factor_result = 1.0f;
         for (int i = 0; i < dim; i++)
             norm += data[i] * data[i];
-        norm = 1.0f / (sqrtf(norm) + 1e-30f);
+        factor_result = sqrtf(norm)+ 1e-30f;
+        norm = 1.0f / (factor_result);
         for (int i = 0; i < dim; i++)
             norm_array[i] = data[i] * norm;
+        return factor_result;
     }
 
 
@@ -212,11 +215,12 @@ class Index {
 
                 data_t* vector_data = (data_t*)ptr;
                 std::vector<data_t> norm_array(dim);
+                double normalize_factor = 1.0;
                 if (normalize) {
-                    normalize_vector(vector_data, norm_array.data());
+                    normalize_factor = normalize_vector(vector_data, norm_array.data());
                     vector_data = norm_array.data();
                 }
-                appr_alg->addPoint((void*)vector_data, id, replace_deleted);
+                appr_alg->addPoint((void*)vector_data, id, replace_deleted, normalize_factor);
                 start = 1;
                 ep_added = true;
             }
@@ -250,8 +254,9 @@ class Index {
                         element_ptr += flag_size + id_size;
 
                         if (flag == 1) {
-                            normalize_vector((data_t*)element_ptr, (norm_array.data() + start_idx));
-                            appr_alg->addPoint((void*)(norm_array.data() + start_idx), id, replace_deleted);
+                            double normalize_factor = 1.0f;
+                            normalize_factor = normalize_vector((data_t*)element_ptr, (norm_array.data() + start_idx));
+                            appr_alg->addPoint((void*)(norm_array.data() + start_idx), id, replace_deleted, normalize_factor);
                         }
                         else if (flag == 0) appr_alg->markDelete(id);
                         else throw std::runtime_error("Wrong flag");
@@ -340,7 +345,15 @@ class Index {
         assert(data_vector.size() == dim);
         size_t data_size = dim * sizeof(data_t);
         
-        std::memcpy(container, data_vector.data(), data_size);
+        if (normalize) {
+            std::cout << "normalized getting" << std::endl;
+            double factor = appr_alg->getNormalizeFactorByLabel(label);
+            for (size_t i = 0; i < data_vector.size(); ++i) {
+                container[i] = data_vector[i] * factor;
+            }
+        }
+        else
+            std::memcpy(container, data_vector.data(), data_size);
 
         return true;
         
