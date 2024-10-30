@@ -696,7 +696,38 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             size += sizeof(linkListSize);
             size += linkListSize;
         }
+
+        size += cur_element_count * sizeof(double);
         return size;
+    }
+
+    // Function to calculate memory consumption of the HierarchicalNSW instance
+    size_t estimateMemoryConsumption() const {
+        size_t total_size = sizeof(*this);  // Start with the size of the class itself
+
+        // Adding sizes of individual dynamic allocations and containers
+        total_size += max_elements_ * size_data_per_element_; // Estimate for `data_level0_memory_`
+        total_size += max_elements_ * sizeof(char*); // Estimate for `linkLists_`
+        for (size_t i = 0; i < cur_element_count; i++) {
+            unsigned int linkListSize = element_levels_[i] > 0 ? size_links_per_element_ * element_levels_[i] + 1 : 0;
+            total_size += linkListSize;
+        }
+        total_size += sizeof(int) * max_elements_; // Estimate for `element_levels_`
+
+        total_size += label_op_locks_.size() * sizeof(std::mutex); // Size of `label_op_locks_` vector
+        total_size += link_list_locks_.size() * sizeof(std::mutex); // Size of `link_list_locks_` vector
+        total_size += label_lookup_.size() * (sizeof(idtype) + sizeof(tableint)); // Estimated size for label_lookup_ map
+        total_size += deleted_elements.size() * (sizeof(tableint)); // Estimated size for deleted_elements set
+        if (normalize_factor_array != nullptr) {
+            total_size += max_elements_ * sizeof(double); // Memory allocated for normalize_factor_array
+        }
+        
+        // Dynamic memory estimates
+        if (visited_list_pool_) {
+            total_size += sizeof(*visited_list_pool_); // Adds the size of the object pointed to by visited_list_pool_
+        }
+
+        return total_size;  // Return the calculated memory usage
     }
 
     void saveIndex(const std::string &location) {
@@ -784,6 +815,7 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             }
         }
 
+        input.seekg(cur_element_count * sizeof(double), input.cur);
         // throw exception if it either corrupted or old index
         if (input.tellg() != total_filesize)
             throw std::runtime_error("Index seems to be corrupted or unsupported");

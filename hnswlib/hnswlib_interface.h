@@ -386,6 +386,16 @@ class Index {
     size_t getActiveCount() const {
         return appr_alg->cur_element_count - appr_alg->deleted_elements.size();
     }
+
+    size_t getEstimatedMemorySize() const {
+        size_t total_size = sizeof(*this);  // Start with the size of the class itself
+        if (l2space)
+            total_size += sizeof(*l2space);
+        if (appr_alg)
+            total_size += appr_alg->estimateMemoryConsumption();
+
+        return total_size;
+    }
 };
 
 /*

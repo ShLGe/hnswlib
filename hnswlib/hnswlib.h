@@ -32,8 +32,8 @@ static __int64 xgetbv(unsigned int x) {
 }
 #else
 #include <x86intrin.h>
-#include <cpuid.h>
-//#include "engine/utility/gutil/ghardware_info.hpp"
+//#include <cpuid.h>
+#include "engine/utility/gutil/ghardware_info.hpp"
 #include <stdint.h>
 static void cpuid(int32_t cpuInfo[4], int32_t eax, int32_t ecx) {
     __cpuid_count(eax, ecx, cpuInfo[0], cpuInfo[1], cpuInfo[2], cpuInfo[3]);
