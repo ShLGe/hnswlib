@@ -280,6 +280,18 @@ class Index {
     }
 
     std::priority_queue<std::pair<data_t, idtype >>
+    searchKnnBruteForce(const void *query_data, size_t k, std::vector<idtype>& id_list) {
+        if (!index_inited)
+            throw std::runtime_error("Index not inited");
+        if (normalize == false)
+            return appr_alg->searchKnnBruteForce(query_data, k, id_list);
+
+        std::vector<data_t> norm_array(dim);
+        normalize_vector((data_t*)query_data, norm_array.data());
+        return appr_alg->searchKnnBruteForce((void*)norm_array.data(), k, id_list);
+    }
+
+    std::priority_queue<std::pair<data_t, idtype >>
     searchRange(const void *query_data, float threshold, size_t efSearch, size_t max_efSearch, BaseFilterFunctor<idtype>* isIdAllowed = nullptr) {
         if (!index_inited)
             throw std::runtime_error("Index not inited");
@@ -323,6 +335,18 @@ class Index {
                 stop_flag = true;
         }
         return final_result;
+    }
+
+    std::priority_queue<std::pair<data_t, idtype >>
+    searchRangeBruteForce(const void *query_data, float threshold, std::vector<idtype>& id_list) {
+        if (!index_inited)
+            throw std::runtime_error("Index not inited");
+        if (normalize == false)
+            return appr_alg->searchRangeBruteForce(query_data, threshold, id_list);
+
+        std::vector<data_t> norm_array(dim);
+        normalize_vector((data_t*)query_data, norm_array.data());
+        return appr_alg->searchRangeBruteForce((void*)norm_array.data(), threshold, id_list);
     }
 
     std::vector<idtype> getIdsList() {

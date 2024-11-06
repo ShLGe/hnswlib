@@ -884,16 +884,16 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
         std::unique_lock <std::mutex> lock_label(getLabelOpMutex(label));
         
         std::unique_lock <std::mutex> lock_table(label_lookup_lock);
+        std::vector<dist_t> data;
         auto search = label_lookup_.find(label);
         if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
-            throw std::runtime_error("Label not found");
+            return data;
         }
         tableint internalId = search->second;
         lock_table.unlock();
 
         char* data_ptrv = getDataByInternalId(internalId);
         size_t dim = *((size_t *) dist_func_param_);
-        std::vector<dist_t> data;
         dist_t* data_ptr = (dist_t*) data_ptrv;
         for (size_t i = 0; i < dim; i++) {
             data.push_back(*data_ptr);
@@ -1397,6 +1397,47 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
         return result;
     }
 
+    std::priority_queue<std::pair<dist_t, idtype >>
+    searchKnnBruteForce(const void *query_data, size_t k, std::vector<idtype>& id_list) const {
+        std::priority_queue<std::pair<dist_t, idtype >> result;
+        for (auto& id: id_list) {
+            std::unique_lock <std::mutex> lock_label(getLabelOpMutex(id));
+            std::unique_lock <std::mutex> lock_table(label_lookup_lock);
+            auto search = label_lookup_.find(id);
+            if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
+                continue;
+            }
+            tableint internalId = search->second;
+            lock_table.unlock();
+            dist_t dist = fstdistfunc_(query_data, getDataByInternalId(internalId), dist_func_param_);
+
+            result.emplace(dist, id);
+            if (result.size() > k) {
+                result.pop();  
+            }
+        }
+        return result;
+    }
+
+    std::priority_queue<std::pair<dist_t, idtype >>
+    searchRangeBruteForce(const void *query_data, float threshold, std::vector<idtype>& id_list) const {
+        std::priority_queue<std::pair<dist_t, idtype >> result;
+        for (auto& id: id_list) {
+            std::unique_lock <std::mutex> lock_label(getLabelOpMutex(id));
+            std::unique_lock <std::mutex> lock_table(label_lookup_lock);
+            auto search = label_lookup_.find(id);
+            if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
+                continue;
+            }
+            tableint internalId = search->second;
+            lock_table.unlock();
+            dist_t dist = fstdistfunc_(query_data, getDataByInternalId(internalId), dist_func_param_);
+
+            if (dist < threshold)
+                result.emplace(dist, id);
+        }
+        return result;
+    }
 
     std::vector<std::pair<dist_t, idtype >>
     searchStopConditionClosest(
