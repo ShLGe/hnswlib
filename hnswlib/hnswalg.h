@@ -929,7 +929,9 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
         std::unique_lock <std::mutex> lock_table(label_lookup_lock);
         auto search = label_lookup_.find(label);
         if (search == label_lookup_.end()) {
-            throw std::runtime_error("Label not found");
+            //throw std::runtime_error("Label not found");
+            lock_table.unlock();
+            return;
         }
         tableint internalId = search->second;
         lock_table.unlock();

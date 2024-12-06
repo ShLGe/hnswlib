@@ -206,7 +206,15 @@ class Index {
         {
             int start = 0;
             if (!ep_added) {
-                const uint8_t* ptr = reinterpret_cast<const uint8_t*>(element_array);
+                uint8_t* ptr;
+                while (start < rows) {
+                    ptr = (uint8_t*)(element_array + start * (flag_size + id_size + embedding_size));
+                    // skip all delete records, until the first upsert record
+                    if (*ptr == 1)
+                        break;
+                    start++;
+                }
+                if (start == rows) return;  // all delete records
                 assert(*ptr == 1);
                 ptr += flag_size;
 
@@ -221,7 +229,7 @@ class Index {
                     vector_data = norm_array.data();
                 }
                 appr_alg->addPoint((void*)vector_data, id, replace_deleted, normalize_factor);
-                start = 1;
+                start++;
                 ep_added = true;
             }
 
