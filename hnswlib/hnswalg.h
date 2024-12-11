@@ -1036,32 +1036,54 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
             addPoint(data_point, label, -1, normalize_factor);
             return;
         }
-        // check if there is vacant place
-        tableint internal_id_replaced;
-        std::unique_lock <std::mutex> lock_deleted_elements(deleted_elements_lock);
-        bool is_vacant_place = !deleted_elements.empty();
-        if (is_vacant_place) {
-            internal_id_replaced = *deleted_elements.begin();
-            deleted_elements.erase(internal_id_replaced);
+
+        bool is_existing_id;
+        bool is_marked_deleted = true;
+        tableint existing_internal_id;
+        std::unique_lock <std::mutex> lock_table(label_lookup_lock);
+        auto search = label_lookup_.find(label);
+        if (search == label_lookup_.end()) {
+            is_existing_id = false;
         }
-        lock_deleted_elements.unlock();
+        else {
+            is_existing_id = true;
+            existing_internal_id = search->second;
+            is_marked_deleted = isMarkedDeleted(existing_internal_id);
+        }
+        lock_table.unlock();
 
-        // if there is no vacant place then add or update point
-        // else add point to vacant place
-        if (!is_vacant_place) {
-            addPoint(data_point, label, -1, normalize_factor);
-        } else {
-            // we assume that there are no concurrent operations on deleted element
-            idtype label_replaced = getExternalLabel(internal_id_replaced);
-            setExternalLabel(internal_id_replaced, label);
+        if (is_existing_id && !is_marked_deleted) {
+            // if update existing vector, update locally
+            updatePoint(data_point, existing_internal_id, 1.0, normalize_factor);
+        }
+        else {
+            // if there is no vacant place then add or update point
+            // else add point to vacant place
+            // check if there is vacant place
+            tableint internal_id_replaced;
+            std::unique_lock <std::mutex> lock_deleted_elements(deleted_elements_lock);
+            bool is_vacant_place = !deleted_elements.empty();
+            if (is_vacant_place) {
+                internal_id_replaced = *deleted_elements.begin();
+                deleted_elements.erase(internal_id_replaced);
+            }
+            lock_deleted_elements.unlock();
 
-            std::unique_lock <std::mutex> lock_table(label_lookup_lock);
-            label_lookup_.erase(label_replaced);
-            label_lookup_[label] = internal_id_replaced;
-            lock_table.unlock();
+            if (!is_vacant_place) {
+                addPoint(data_point, label, -1, normalize_factor);
+            } else {
+                // we assume that there are no concurrent operations on deleted element
+                idtype label_replaced = getExternalLabel(internal_id_replaced);
+                setExternalLabel(internal_id_replaced, label);
 
-            unmarkDeletedInternal(internal_id_replaced);
-            updatePoint(data_point, internal_id_replaced, 1.0, normalize_factor);
+                std::unique_lock <std::mutex> lock_table(label_lookup_lock);
+                label_lookup_.erase(label_replaced);
+                label_lookup_[label] = internal_id_replaced;
+                lock_table.unlock();
+
+                unmarkDeletedInternal(internal_id_replaced);
+                updatePoint(data_point, internal_id_replaced, 1.0, normalize_factor);
+            }
         }
     }
 
