@@ -428,6 +428,20 @@ class Index {
 
         return total_size;
     }
+
+    // Distance calculation tool function
+    dist_t calculateDistance(const void *queryv, const void *basev) {
+        //For efficiency, it doesn't check valid pointer of appr_alg. Please ensure to init appr_alg before use.
+        if (normalize) {
+            std::vector<data_t> queryv_norm_array(dim);
+            std::vector<data_t> basev_norm_array(dim);
+            normalize_vector((data_t*)basev, basev_norm_array.data());
+            normalize_vector((data_t*)queryv, queryv_norm_array.data());
+            return appr_alg->fstdistfunc_(queryv_norm_array.data(), basev_norm_array.data(), appr_alg->dist_func_param_);
+        }
+
+        return appr_alg->fstdistfunc_(queryv, basev, appr_alg->dist_func_param_);
+    }
 };
 
 /*
