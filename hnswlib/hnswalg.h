@@ -1,3 +1,4 @@
+
 #pragma once
 
 #include "visited_list_pool.h"
@@ -955,7 +956,8 @@ class HierarchicalNSW : public AlgorithmInterface<idtype, dist_t> {
                 deleted_elements.insert(internalId);
             }
         } else {
-            throw std::runtime_error("The requested to delete element is already deleted");
+            // throw std::runtime_error("The requested to delete element is already deleted");
+            // just ignore for now, refactor in CORE-4505
         }
     }
 
